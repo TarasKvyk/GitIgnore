@@ -1,6 +1,6 @@
 # Prerequisites
 *.d
-main.cpp
+text0.txt
 # Compiled Object files
 *.slo
 *.lo
