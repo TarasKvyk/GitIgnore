@@ -1,5 +1,7 @@
 # Prerequisites
 *.d
+# Folders
+FolderToIgnore/
 # Compiled Object files
 *.slo
 *.lo
@@ -14,7 +16,6 @@
 *.so
 *.dylib
 *.dll
-FolderToIgnore/
 # Fortran module files
 *.mod
 *.smod
