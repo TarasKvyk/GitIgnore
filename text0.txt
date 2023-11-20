@@ -1,92 +1,87 @@
-std::string GetThreadName(int threadId, const std::string& statusPath) {
-    std::ifstream statusFile(statusPath);
-    std::string line;
-    while (std::getline(statusFile, line)) {
-    if (line.find("Name:") == 0) {
-            std::istringstream iss(line);
-            std::string name;
-            iss >> name >> std::ws;
-            std::getline(iss, name);
-            return name;
-    }
-    }
-    return "";
-}
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <limits>
+#include <string>
 
-int GetThreadPriority(int pid, int tid) {
-    std::string statPath = "/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid) + "/stat";
-    std::ifstream statFile(statPath);
-    std::string line;
+struct ThreadInfo {
+    int TID;
+    std::string Name;
+    std::string State;
+    int CPULoad;
+    int Nice;
+    int Priority;
+};
 
-    while (std::getline(statFile, line)) {
-    if (line.find(") ") != std::string::npos) {
-            std::istringstream iss(line.substr(line.find(") ") + 2)); // Skip the part before and including the first ")"
-
-            // Fields 18 and 19 in the stat file represent "nice" and "priority"
-            int nice, priority;
-            for (int i = 0; i < 15; ++i) {
-                iss.ignore(std::numeric_limits<std::streamsize>::max(), ' '); // Ignore preceding fields
-            }
-            iss >> priority >> nice;
-
-            return nice;
-    }
-    }
-
-    return 0; // Default value if thread priority information is not found
-}
-
-
-long getThreadCpuTime(int pid, int tid) {
-    std::ifstream statFile("/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid) + "/stat");
-
-    if (!statFile.is_open()) {
-    std::cerr << "Error opening stat file for thread " << tid << std::endl;
-    return -1;
-    }
-
-    // Read the contents of the stat file
-    std::string line;
-    std::getline(statFile, line);
-
-    // Extract the 14th and 15th fields from the stat file, which represent utime and stime
-    std::istringstream iss(line);
-    long utime, stime, cutime, cstime;
-
-    for (int i = 0; i < 13; ++i) {
-    while (iss.get() != ' ');  // Read characters until a space is encountered
-    }
-
-    iss >> utime >> stime >> cutime >> cstime;;
-    long clockTicksPerSecond = sysconf(_SC_CLK_TCK);
-    long totalTime = utime + stime + cutime + cstime;
-
-    // Calculate the total CPU time in milliseconds
-    double totalTimeMilliseconds = (totalTime) * 1000.0 / clockTicksPerSecond;
-    statFile.close();
-
-    return (long)totalTimeMilliseconds;
-}
-
-ThreadInfo GetThreadInfo(int processId, int threadId) {
-    std::string procPath = "/proc/" + std::to_string(processId) + "/task/" + std::to_string(threadId);
+ThreadInfo GetThreadInfo(int pid, int tid) {
+    std::string procPath = "/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid);
     ThreadInfo threadInfo;
 
     try {
-    std::string statPath = procPath + "/stat";
-    std::ifstream statFile(statPath);
-    std::string statContent;
-    std::getline(statFile, statContent);
-    statFile.close();
+        // Read thread name from status file
+        std::ifstream statusFile(procPath + "/status");
+        std::string line;
+        while (std::getline(statusFile, line)) {
+            if (line.find("Name:") == 0) {
+                std::istringstream iss(line);
+                std::string name;
+                iss >> name >> std::ws;
+                std::getline(iss, threadInfo.Name);
+                break;
+            }
+        }
 
-    std::istringstream statStream(statContent);
-    statStream >> threadInfo.TID >> threadInfo.Name >> threadInfo.State;
+        // Read other thread information from stat file
+        std::ifstream statFile(procPath + "/stat");
+        std::string statContent;
+        std::getline(statFile, statContent);
+        statFile.close();
 
-    threadInfo.CPULoad = getThreadCpuTime(processId, threadId);
-    threadInfo.Nice = GetThreadPriority(threadId, threadId);
-    threadInfo.Priority = 0; // Thread priority in stat file (adjust accordingly)
+        std::istringstream statStream(statContent);
+        statStream >> threadInfo.TID >> threadInfo.Name >> threadInfo.State;
+
+        // Get thread priority
+        std::string statPath = procPath + "/stat";
+        statFile.open(statPath);
+        std::string statLine;
+        while (std::getline(statFile, statLine)) {
+            if (statLine.find(") ") != std::string::npos) {
+                std::istringstream iss(statLine.substr(statLine.find(") ") + 2));
+                int nice, priority;
+                for (int i = 0; i < 15; ++i) {
+                    iss.ignore(std::numeric_limits<std::streamsize>::max(), ' ');
+                }
+                iss >> priority >> nice;
+                threadInfo.Nice = nice;
+                break;
+            }
+        }
+        statFile.close();
+
+        // Get thread CPU time
+        statFile.open(procPath + "/stat");
+        if (!statFile.is_open()) {
+            std::cerr << "Error opening stat file for thread " << tid << std::endl;
+            return threadInfo;
+        }
+
+        std::getline(statFile, statContent);
+        statFile.close();
+
+        std::istringstream statTimeStream(statContent);
+        long utime, stime, cutime, cstime;
+        for (int i = 0; i < 13; ++i) {
+            while (statTimeStream.get() != ' ');
+        }
+        statTimeStream >> utime >> stime >> cutime >> cstime;
+        long clockTicksPerSecond = sysconf(_SC_CLK_TCK);
+        long totalTime = utime + stime + cutime + cstime;
+        double totalTimeMilliseconds = (totalTime) * 1000.0 / clockTicksPerSecond;
+        threadInfo.CPULoad = static_cast<int>(totalTimeMilliseconds);
+
+        threadInfo.Priority = 0; // Thread priority in stat file (adjust accordingly)
     } catch (const std::exception& e) {
-    // Handle exceptions
+        std::cerr << "Error: " << e.what() << std::endl;
     }
 
     return threadInfo;
