@@ -1,17 +1,197 @@
+#include "mainwindow.h"
+#include "ui_mainwindow.h"
+#include <QString>
+#include <QFile>
+#include <pthread.h>
+#include <syscall.h>
+#include <QDir>
+#include <QTextStream>
+#include <QDebug>
+#include <QProcess>
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <limits>
 #include <string>
+#include <vector>
+#include <dirent.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#include <limits>
 
-struct ThreadInfo {
+QVector<pid_t> tids;
+QVector<pthread_t> threads;
+QVector<QString> lines;
+
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
+    , ui(new Ui::MainWindow)
+{
+    ui->setupUi(this);
+}
+
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
+struct MyParentThreadData {
+    int threadCount;
+    QString SyncType;
+    // Додайте інші параметри, які вам потрібні
+};
+
+struct ThreadData {
+    int startLine;
+    int endLine;
+};
+
+void * FindMinWordNone(void* args)
+{
+    ThreadData* data = static_cast<ThreadData*>(args);
+    int startLine = data->startLine;
+    int endLine = data->endLine;
+
+    for (int i = startLine; i < endLine; ++i) {
+        const QString& line = lines[i];
+
+        QStringList words = line.split(' ', Qt::SkipEmptyParts);
+
+        QString minWord;
+        int minWordLength = INT_MAX;
+
+        for (const QString& word : words) {
+            if (word.length() < minWordLength) {
+                minWord = word;
+                minWordLength = word.length();
+            }
+        }
+
+//        QTextStream out(stdout);
+//        out  << "TID " <<  syscall(SYS_gettid)<< "\n";
+//        out << "Line: " << i + 1 << "\n";
+//        out << "Min Word: " << minWord << "\n";
+//        out << "-----------------\n";
+
+        // Виведення результатів у файл
+        QFile outputFile(QString("/home/taras-kvyk/Lab6/thread.txt").arg(syscall(SYS_gettid)));
+        if (outputFile.open(QIODevice::Append | QIODevice::Text)) {
+            QTextStream out(&outputFile);
+            out << "Line: " << i + 1 << "\n";
+            out << "Min Word: " << minWord << "\n";
+            out << "-----------------\n";
+            outputFile.close();
+        }
+    }
+
+}
+
+void* ThreadFunc(void* args) {
+    MyParentThreadData* data = static_cast<MyParentThreadData*>(args);
+
+    QString filePath = "/home/taras-kvyk/Lab6/source.txt";
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qCritical() << "Failed to open file:" << filePath;
+    }
+
+    lines.clear();
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        lines.append(line);
+    }
+
+    file.close();
+
+    int threadCount = data->threadCount;
+
+    if(data->SyncType == "None")
+    {
+        for (int j = 0; j < threadCount; j++) {
+            int numLinesPerThread = lines.size() / threadCount;
+            int startLine = j * numLinesPerThread;
+            int endLine = (j == threadCount - 1) ? lines.size() : startLine + numLinesPerThread;
+
+            ThreadData* data = new ThreadData;
+            data->startLine = startLine;
+            data->endLine = endLine;
+
+            pthread_t threadHandle;
+            pthread_create(&threadHandle, nullptr, FindMinWordNone, data);
+            tids.push_back(threadHandle);
+            threads.push_back(threadHandle);
+        }
+
+    }
+    else  if(data->SyncType == "Bariers")
+    {
+
+    }
+    else  if(data->SyncType == "Cond. Variables")
+    // Ваш код
+
+    delete data;
+    return nullptr;
+}
+
+class ThreadInfo {
+public:
     int TID;
     std::string Name;
-    std::string State;
-    int CPULoad;
     int Nice;
     int Priority;
+    std::string State;
+    long CPULoad;
 };
+
+ThreadInfo GetThreadInfo(int processId, int threadId);
+
+void MainWindow::on_RunBtn_clicked() {
+    ThreadInfo info = GetThreadInfo(getpid(), gettid());
+    bool isValid;
+    int threadCount = ui->ThreadCountComboBox->currentText().toInt(&isValid);
+    if (!isValid)
+        return;
+
+    MyParentThreadData* data = new MyParentThreadData;
+    data->threadCount = threadCount;
+    data->SyncType = ui->SynchTypeComboBox->currentText();
+
+    pthread_t thread;
+    int result = pthread_create(&thread, nullptr, ThreadFunc, data);
+
+    if (result != 0) {
+        qCritical() << "Failed to create thread";
+        delete data; // Звільнення пам'яті в разі помилки
+    }
+}
+
+
+
+
+void MainWindow::on_DetachBtn_clicked()
+{
+
+}
+
+
+void MainWindow::on_CancelBtn_clicked()
+{
+
+}
+
+
+void MainWindow::on_ReniceBtn_clicked()
+{
+
+}
+
+
+void MainWindow::on_AffinityBtn_clicked()
+{
+
+}
+
 
 ThreadInfo GetThreadInfo(int pid, int tid) {
     std::string procPath = "/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid);
@@ -53,6 +233,7 @@ ThreadInfo GetThreadInfo(int pid, int tid) {
                 }
                 iss >> priority >> nice;
                 threadInfo.Nice = nice;
+                threadInfo.Priority = priority;
                 break;
             }
         }
@@ -78,8 +259,6 @@ ThreadInfo GetThreadInfo(int pid, int tid) {
         long totalTime = utime + stime + cutime + cstime;
         double totalTimeMilliseconds = (totalTime) * 1000.0 / clockTicksPerSecond;
         threadInfo.CPULoad = static_cast<int>(totalTimeMilliseconds);
-
-        threadInfo.Priority = 0; // Thread priority in stat file (adjust accordingly)
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
     }
